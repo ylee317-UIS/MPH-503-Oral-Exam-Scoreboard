@@ -83,10 +83,50 @@ $('focusBack').onclick=closeFocus;
 $('focusLock').onclick=()=>{closeFocus();$('lockScoreboard').click()};
 $('focusQuestions').addEventListener('click',e=>{let btn=e.target.closest('.focusQuestion');if(btn&&focusedStudent)openScore(focusedStudent,+btn.dataset.slot)});
 function renderQuestionPreview(){let t=current(),q=getQ(t,$('questionNumber').value);$('questionPreview').innerHTML=q?'<b>'+escape(q.id)+' — '+q.points+' points</b><div>'+escape(q.text)+'</div>'+((q.images||[]).map(src=>'<img alt="Question image" src="'+src+'">').join('')):'Click a question above to see its full text.';if(q){$('scoreNumber').max=q.points;$('scoreHint').textContent='Automatically filled with '+q.points+' points. Change the score if needed. A student cannot receive the same question twice.'}else $('scoreHint').textContent='Click one of the question buttons above.'}
-function renderQuestionButtons(){let t=current(),s=t.students.find(x=>x.id===editing.id),selected=$('questionNumber').value;let qs=[...t.bank].sort(sortQ);let regular=qs.filter(q=>!/^R/i.test(q.id)),r=qs.filter(q=>/^R/i.test(q.id));let html='';for(let [label,items] of [['Statistics',regular],['R questions',r]]){if(!items.length)continue;html+=`<div class="questionGroupLabel">${label}</div>`;let previousPoints=null;for(let q of items){if(label==='Statistics'&&previousPoints!==null&&q.points!==previousPoints){html+='<div class="questionRowBreak" aria-hidden="true"></div>';}previousPoints=q.points;let used=s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===String(q.id));html+=`<button type="button" class="pickQuestion ${selected===q.id?'selected':''} ${used?'used':''}" data-qid="${escape(q.id)}" ${used?'disabled':''} aria-pressed="${selected===q.id}">${escape(q.id)}<span>${q.points} points</span></button>`;}}$('questionButtons').innerHTML=html||'<div>No questions in this class. Add questions from Question bank.</div>'}
-function openScore(id,slot){let t=current(),s=t.students.find(x=>x.id===id),a=s.answers[slot]||{};editing={id,slot};$('scoreTitle').textContent=`${s.name} — Question ${slot+1}`;$('questionNumber').value=a.number||'';$('scoreNumber').value=a.score??'';renderQuestionButtons();renderQuestionPreview();$('scoreDialog').showModal()}
+// Final oral examination: each of the three scoring slots has its own numbered question set.
+// IDs 31..315 mean 31,32,...,39,310,...,315 (not the integer range 31..315).
+function finalQuestionSet(id){
+ const n=String(id).trim();
+ if(/^(?:[1-9]|1[0-5])$/.test(n))return 0;        // 1..15
+ if(/^3(?:[1-9]|1[0-5])$/.test(n))return 1;      // 31..39, 310..315
+ if(/^5(?:[1-9]|1[0-5])$/.test(n))return 2;      // 51..59, 510..515
+ return -1;
+}
+const FINAL_GROUP_LABELS=['Group 1 · Questions 1–15','Group 3 · Questions 31–315','Group 5 · Questions 51–515'];
+function renderQuestionButtons(){
+ const t=current(),s=t.students.find(x=>x.id===editing.id),selected=$('questionNumber').value;
+ const qs=[...t.bank].sort(sortQ);
+ let html='';
+ if(t.exam==='final'){
+  // Exactly one question from each independent question set (one set per slot).
+  const group=editing.slot;
+  const items=qs.filter(q=>finalQuestionSet(q.id)===group);
+  html+=`<div class="questionGroupLabel">${FINAL_GROUP_LABELS[group]}</div>`;
+  for(const q of items){
+   const used=s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===String(q.id));
+   html+=`<button type="button" class="pickQuestion ${selected===q.id?'selected':''} ${used?'used':''}" data-qid="${escape(q.id)}" ${used?'disabled':''} aria-pressed="${selected===q.id}">${escape(q.id)}<span>${q.points} points</span></button>`;
+  }
+  if(!items.length)html+='<div class="questionGroupLabel">No questions in this group. Check the uploaded final exam PowerPoint.</div>';
+ }else{
+  // Preserve the existing midterm question selection exactly as before.
+  const regular=qs.filter(q=>!/^R/i.test(q.id)),r=qs.filter(q=>/^R/i.test(q.id));
+  for(const [label,items] of [['Statistics',regular],['R questions',r]]){
+   if(!items.length)continue;
+   html+=`<div class="questionGroupLabel">${label}</div>`;
+   let previousPoints=null;
+   for(const q of items){
+    if(label==='Statistics'&&previousPoints!==null&&q.points!==previousPoints)html+='<div class="questionRowBreak" aria-hidden="true"></div>';
+    previousPoints=q.points;
+    const used=s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===String(q.id));
+    html+=`<button type="button" class="pickQuestion ${selected===q.id?'selected':''} ${used?'used':''}" data-qid="${escape(q.id)}" ${used?'disabled':''} aria-pressed="${selected===q.id}">${escape(q.id)}<span>${q.points} points</span></button>`;
+   }
+  }
+ }
+ $('questionButtons').innerHTML=html||'<div>No questions in this class. Add questions from Question bank.</div>';
+}
+function openScore(id,slot){let t=current(),s=t.students.find(x=>x.id===id),a=s.answers[slot]||{};editing={id,slot};$('scoreTitle').textContent=`${s.name} — Question ${slot+1}${t.exam==='final'?' ('+FINAL_GROUP_LABELS[slot]+')':''}`;$('questionNumber').value=a.number||'';$('scoreNumber').value=a.score??'';renderQuestionButtons();renderQuestionPreview();$('scoreDialog').showModal()}
 $('questionButtons').onclick=e=>{let btn=e.target.closest('button[data-qid]');if(!btn||btn.disabled)return;let q=getQ(current(),btn.dataset.qid);$('questionNumber').value=q.id;$('scoreNumber').value=q.points;renderQuestionButtons();renderQuestionPreview()};
-$('cancelScore').onclick=()=>$('scoreDialog').close();$('saveScore').onclick=()=>{let t=current(),s=t.students.find(x=>x.id===editing.id),n=$('questionNumber').value,raw=$('scoreNumber').value,sc=Number(raw),q=getQ(t,n);if(!q||raw.trim()===''||!Number.isFinite(sc)||sc<0||sc>q.points)return alert('Select a valid question and enter a score between 0 and '+(q?.points??'?')+'.');if(s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===n))return alert(`${n} is already assigned to this student.`);s.answers[editing.slot]={number:n,score:sc};$('scoreDialog').close();render()};$('clearScore').onclick=()=>{current().students.find(x=>x.id===editing.id).answers[editing.slot]=null;$('scoreDialog').close();render()};
+$('cancelScore').onclick=()=>$('scoreDialog').close();$('saveScore').onclick=()=>{let t=current(),s=t.students.find(x=>x.id===editing.id),n=$('questionNumber').value,raw=$('scoreNumber').value,sc=Number(raw),q=getQ(t,n);if(!q||raw.trim()===''||!Number.isFinite(sc)||sc<0||sc>q.points)return alert('Select a valid question and enter a score between 0 and '+(q?.points??'?')+'.');if(t.exam==='final'&&finalQuestionSet(n)!==editing.slot)return alert('Select a question from '+FINAL_GROUP_LABELS[editing.slot]+'.');if(s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===n))return alert(`${n} is already assigned to this student.`);s.answers[editing.slot]={number:n,score:sc};$('scoreDialog').close();render()};$('clearScore').onclick=()=>{current().students.find(x=>x.id===editing.id).answers[editing.slot]=null;$('scoreDialog').close();render()};
 function showBank(){const bank=[...current().bank].sort(sortQ);$('bankCount').textContent=`(${bank.length} questions)`;$('bankList').innerHTML=bank.map(q=>`<div class="bankEntry"><div class="row"><strong>${escape(q.id)} · ${q.points} points</strong><span><button class="editBank" data-qid="${escape(q.id)}">Edit</button> <button class="removeBank danger" data-qid="${escape(q.id)}">Delete</button></span></div><div class="excerpt">${escape(q.text)}</div>${(q.images||[]).map(src=>`<img src="${src}" alt="Question illustration">`).join('')}</div>`).join('')||'<div class="empty">No questions yet. Add one to begin.</div>';}
 // PowerPoint importer: one numbered question per slide (Q1, 21, R6 etc.).
 function pptxParagraphs(xml){const doc=new DOMParser().parseFromString(xml,'application/xml');if(doc.querySelector('parsererror'))throw Error('Invalid PowerPoint slide XML.');const p=Array.from(doc.getElementsByTagNameNS('*','p'));return p.map(el=>Array.from(el.getElementsByTagNameNS('*','t')).map(t=>t.textContent).join('').trim()).filter(Boolean)}
