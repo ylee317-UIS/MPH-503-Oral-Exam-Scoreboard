@@ -95,7 +95,7 @@ for(const term of state.terms){
  migrateExams(term);
 }
 function current(){return state.terms.find(t=>t.id===state.active)||state.terms[0]}function save(){localStorage.setItem(KEY,JSON.stringify(state))}function escape(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function render(){const t=current(),ex=activeExam(t);
+function render(){const t=current();syncExamFormatFromBank(t);const ex=activeExam(t);
 $('examIndicator').textContent=(ex.kind==='final'?'Final format: ':'Midterm format: ')+ex.name;
 $('examSelect').innerHTML=t.exams.map(x=>`<option value="${escape(x.id)}" ${x.id===t.activeExamId?'selected':''}>${escape(x.name)}</option>`).join('');
 $('term').innerHTML=state.terms.map(x=>`<option value="${escape(x.id)}" ${x.id===t.id?'selected':''}>${escape(x.name)}</option>`).join('');$('count').textContent=`${t.students.length} students`;$('students').innerHTML=t.students.length?t.students.map(s=>{let sum=s.answers.reduce((n,a)=>n+(a&&a.score!==null?Number(a.score):0),0),possible=s.answers.reduce((n,a)=>n+(a&&getQ(t,a.number)?Number(getQ(t,a.number).points):0),0);return `<div class="student"><div class="name"><button class="studentOpen" data-id="${escape(s.id)}" title="Show only ${escape(s.name)}" aria-label="Open ${escape(s.name)} student view">${escape(s.name)}</button> <button class="rename" data-id="${escape(s.id)}" title="Rename student" aria-label="Rename ${escape(s.name)}">✎</button></div>${[0,1,2].map(i=>{let a=s.answers[i];return `<button class="question ${a&&a.number?'done':''}" data-id="${escape(s.id)}" data-slot="${i}"><small>Question ${i+1}</small><b>${a&&a.number?String(a.number):'Select question'}</b><small>${a&&a.score!==null?'Score: '+a.score+' / '+(getQ(t,a.number)?.points??'?'):'Not graded'}</small></button>`}).join('')}<div class="total">${+sum.toFixed(3)} <small class="muted">/ ${+possible.toFixed(3)}</small></div></div>`}).join(''):'<div class="empty">No students yet. Add a student or paste a class roster above.</div>';save();if(focusedStudent)renderFocus()}
@@ -153,11 +153,37 @@ function finalQuestionSet(id){
  return -1;
 }
 const FINAL_GROUP_LABELS=['Group 1 · Questions 1–15','Group 3 · Questions 31–315','Group 5 · Questions 51–515'];
+// Recognize the 45-question final bank even when it was uploaded to an exam
+// originally created with the default Midterm format. Never change its scores.
+function isThreeGroupFinalBank(bank){
+ if(!Array.isArray(bank)||bank.length<21)return false;
+ const counts=[0,0,0];
+ for(const q of bank){
+  const group=finalQuestionSet(q.id);
+  if(group<0)return false;
+  counts[group]++;
+ }
+ return counts.every(n=>n>=5);
+}
+function syncExamFormatFromBank(t){
+ if(!isThreeGroupFinalBank(t.bank))return false;
+ const ex=activeExam(t);
+ if(ex.kind!=='final'){
+  ex.kind='final';t.exam='final';
+  return true;
+ }
+ t.exam='final';
+ return false;
+}
+function isFinalGroupMode(t){
+ return t.exam==='final'||isThreeGroupFinalBank(t.bank);
+}
+
 function renderQuestionButtons(){
  const t=current(),s=t.students.find(x=>x.id===editing.id),selected=$('questionNumber').value;
  const qs=[...t.bank].sort(sortQ);
  let html='';
- if(t.exam==='final'){
+ if(isFinalGroupMode(t)){
   // Exactly one question from each independent question set (one set per slot).
   const group=editing.slot;
   const items=qs.filter(q=>finalQuestionSet(q.id)===group);
@@ -184,9 +210,9 @@ function renderQuestionButtons(){
  }
  $('questionButtons').innerHTML=html||'<div>No questions in this class. Add questions from Question bank.</div>';
 }
-function openScore(id,slot){let t=current(),s=t.students.find(x=>x.id===id),a=s.answers[slot]||{};editing={id,slot};$('scoreTitle').textContent=`${s.name} — Question ${slot+1}${t.exam==='final'?' ('+FINAL_GROUP_LABELS[slot]+')':''}`;$('questionNumber').value=a.number||'';$('scoreNumber').value=a.score??'';renderQuestionButtons();renderQuestionPreview();$('scoreDialog').showModal()}
+function openScore(id,slot){let t=current(),s=t.students.find(x=>x.id===id),a=s.answers[slot]||{};editing={id,slot};$('scoreTitle').textContent=`${s.name} — Question ${slot+1}${isFinalGroupMode(t)?' ('+FINAL_GROUP_LABELS[slot]+')':''}`;$('questionNumber').value=a.number||'';$('scoreNumber').value=a.score??'';renderQuestionButtons();renderQuestionPreview();$('scoreDialog').showModal()}
 $('questionButtons').onclick=e=>{let btn=e.target.closest('button[data-qid]');if(!btn||btn.disabled)return;let q=getQ(current(),btn.dataset.qid);$('questionNumber').value=q.id;$('scoreNumber').value=q.points;renderQuestionButtons();renderQuestionPreview()};
-$('cancelScore').onclick=()=>$('scoreDialog').close();$('saveScore').onclick=()=>{let t=current(),s=t.students.find(x=>x.id===editing.id),n=$('questionNumber').value,raw=$('scoreNumber').value,sc=Number(raw),q=getQ(t,n);if(!q||raw.trim()===''||!Number.isFinite(sc)||sc<0||sc>q.points)return alert('Select a valid question and enter a score between 0 and '+(q?.points??'?')+'.');if(t.exam==='final'&&finalQuestionSet(n)!==editing.slot)return alert('Select a question from '+FINAL_GROUP_LABELS[editing.slot]+'.');if(s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===n))return alert(`${n} is already assigned to this student.`);s.answers[editing.slot]={number:n,score:sc};$('scoreDialog').close();render()};$('clearScore').onclick=()=>{current().students.find(x=>x.id===editing.id).answers[editing.slot]=null;$('scoreDialog').close();render()};
+$('cancelScore').onclick=()=>$('scoreDialog').close();$('saveScore').onclick=()=>{let t=current(),s=t.students.find(x=>x.id===editing.id),n=$('questionNumber').value,raw=$('scoreNumber').value,sc=Number(raw),q=getQ(t,n);if(!q||raw.trim()===''||!Number.isFinite(sc)||sc<0||sc>q.points)return alert('Select a valid question and enter a score between 0 and '+(q?.points??'?')+'.');if(isFinalGroupMode(t)&&finalQuestionSet(n)!==editing.slot)return alert('Select a question from '+FINAL_GROUP_LABELS[editing.slot]+'.');if(s.answers.some((a,i)=>i!==editing.slot&&a&&String(a.number)===n))return alert(`${n} is already assigned to this student.`);s.answers[editing.slot]={number:n,score:sc};$('scoreDialog').close();render()};$('clearScore').onclick=()=>{current().students.find(x=>x.id===editing.id).answers[editing.slot]=null;$('scoreDialog').close();render()};
 function showBank(){const bank=[...current().bank].sort(sortQ);$('bankCount').textContent=`(${bank.length} questions)`;$('bankList').innerHTML=bank.map(q=>`<div class="bankEntry"><div class="row"><strong>${escape(q.id)} · ${q.points} points</strong><span><button class="editBank" data-qid="${escape(q.id)}">Edit</button> <button class="removeBank danger" data-qid="${escape(q.id)}">Delete</button></span></div><div class="excerpt">${escape(q.text)}</div>${(q.images||[]).map(src=>`<img src="${src}" alt="Question illustration">`).join('')}</div>`).join('')||'<div class="empty">No questions yet. Add one to begin.</div>';}
 // PowerPoint importer: one numbered question per slide (Q1, 21, R6 etc.).
 function pptxParagraphs(xml){const doc=new DOMParser().parseFromString(xml,'application/xml');if(doc.querySelector('parsererror'))throw Error('Invalid PowerPoint slide XML.');const p=Array.from(doc.getElementsByTagNameNS('*','p'));return p.map(el=>Array.from(el.getElementsByTagNameNS('*','t')).map(t=>t.textContent).join('').trim()).filter(Boolean)}
@@ -221,7 +247,7 @@ async function importPowerPoint(file){
  const fresh=slides.filter(q=>!existing.has(q.id.toUpperCase()));
  if(!fresh.length)return {added:0,skipped:slides.length,images:0};
  if(!confirm(`Found ${slides.length} questions in ${file.name}.\n\nAdd ${fresh.length} new question(s) to ${current().name}?\nSkip ${slides.length-fresh.length} existing questions and preserve all scores?`))return {cancelled:true};
- old.push(...fresh);showBank();render();
+ old.push(...fresh);syncExamFormatFromBank(current());showBank();render();
  return {added:fresh.length,skipped:slides.length-fresh.length,images:fresh.reduce((n,q)=>n+q.images.length,0)};
 }
 function replaceCurrentBank(slides){
@@ -231,6 +257,7 @@ function replaceCurrentBank(slides){
  const msg=`Replace questions for ${ex.name} in ${t.name}?\n\nThis replaces ${oldCount} questions with ${slides.length} and clears ${scoreCount} recorded scores ONLY for ${ex.name}.\n\nStudent names and scores in other exams are preserved.`;
  if(!confirm(msg))return false;
  t.bank=slides;
+ syncExamFormatFromBank(t);
  clearCurrentScores();
  focusedStudent=null;
  document.body.classList.remove('student-focus');
